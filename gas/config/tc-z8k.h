@@ -32,6 +32,12 @@ struct internal_reloc;
 
 #define tc_fix_adjustable(X)  0
 
+/* When linkrelax is active, force all PC-relative fixups to emit
+   relocations so the linker can recompute them after relaxation
+   shrinks instructions.  */
+#define TC_FORCE_RELOCATION(FIX)	z8k_force_relocation (FIX)
+extern int z8k_force_relocation (struct fix *);
+
 #define LISTING_HEADER "Zilog Z8000 GAS "
 #define RELOC_32 1234
 

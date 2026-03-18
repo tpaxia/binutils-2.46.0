@@ -24,6 +24,7 @@
 #include "bfd.h"
 #include "libbfd.h"
 #include "bfdlink.h"
+#include "genlink.h"
 #include "coff/z8k.h"
 #include "coff/internal.h"
 #include "libcoff.h"
@@ -33,6 +34,17 @@
 static reloc_howto_type r_imm32 =
 HOWTO (R_IMM32, 0, 4, 32, false, 0,
        complain_overflow_bitfield, 0, "r_imm32", true, 0xffffffff,
+       0xffffffff, false);
+
+/* Internal relocation type used during linker relaxation.  When a segmented
+   address (R_IMM32) has an offset that fits in 8 bits, we relax it to the
+   short form, saving 2 bytes.  This type never appears in object files.
+   We keep size=4 so the bounds check in extra_case passes (the source
+   still has 4 bytes), but we only write 2 bytes to the output.  */
+#define R_IMM32_SHORT 0x30
+static reloc_howto_type r_imm32_short =
+HOWTO (R_IMM32_SHORT, 0, 4, 32, false, 0,
+       complain_overflow_bitfield, 0, "r_imm32_short", true, 0xffffffff,
        0xffffffff, false);
 
 static reloc_howto_type r_imm4l =
@@ -216,6 +228,7 @@ extra_case (bfd *in_abfd,
       return false;
     }
 
+
   switch (reloc->howto->type)
     {
     case R_IMM8:
@@ -239,10 +252,7 @@ extra_case (bfd *in_abfd,
 	{
 	  bfd_vma dst = bfd_coff_reloc16_get_value (reloc, link_info,
 						    input_section);
-	  /* Addresses are 23 bit, and the layout of those in a 32-bit
-	     value is as follows:
-	       1AAAAAAA xxxxxxxx AAAAAAAA AAAAAAAA
-	     (A - address bits,  x - ignore).  */
+	  /* Long form: 1SSSSSSS xxxxxxxx AAAAAAA AAAAAAAA  */
 	  dst = (dst & 0xffff) | ((dst & 0xff0000) << 8) | 0x80000000;
 	  bfd_put_32 (in_abfd, dst, data + *dst_ptr);
 	}
@@ -250,9 +260,23 @@ extra_case (bfd *in_abfd,
       *src_ptr += 4;
       break;
 
+    case R_IMM32_SHORT:
+      {
+	/* Short form decided by estimate.  0SSSSSSS OOOOOOOO.
+	   Consumes 4 src bytes, writes 2.  */
+	bfd_vma dst = bfd_coff_reloc16_get_value (reloc, link_info,
+						  input_section);
+	bfd_vma seg = (dst >> 16) & 0x7f;
+	bfd_vma off = dst & 0xff;
+	bfd_put_16 (in_abfd, (seg << 8) | off, data + *dst_ptr);
+      }
+      *dst_ptr += 2;
+      *src_ptr += 4;
+      break;
+
     case R_IMM4L:
       bfd_put_8 (in_abfd,
-		 ((bfd_get_8 (in_abfd, data + *dst_ptr) & 0xf0)
+		 ((bfd_get_8 (in_abfd, data + *src_ptr) & 0xf0)
 		  | (0x0f & bfd_coff_reloc16_get_value (reloc, link_info,
 							input_section))),
 		 data + *dst_ptr);
@@ -313,7 +337,7 @@ extra_case (bfd *in_abfd,
 	  }
 
 	bfd_put_8 (in_abfd,
-		   ((bfd_get_8 (in_abfd, data + *dst_ptr) & 0x80)
+		   ((bfd_get_8 (in_abfd, data + *src_ptr) & 0x80)
 		    + (-gap / 2 & 0x7f)),
 		   data + *dst_ptr);
 	*dst_ptr += 1;
@@ -340,7 +364,7 @@ extra_case (bfd *in_abfd,
 	  }
 
 	bfd_put_16 (in_abfd,
-		    ((bfd_get_16 (in_abfd, data + *dst_ptr) & 0xf000)
+		    ((bfd_get_16 (in_abfd, data + *src_ptr) & 0xf000)
 		     | (-gap / 2 & 0x0fff)),
 		    data + *dst_ptr);
 	*dst_ptr += 2;
@@ -382,6 +406,161 @@ extra_case (bfd *in_abfd,
   return true;
 }
 
+/* Linker relaxation: examine each R_IMM32 relocation to see if the resolved
+   segmented address has an offset that fits in 8 bits.  If so, switch to the
+   short form (R_IMM32_SHORT), saving 2 bytes per instruction.
+
+   Called from bfd_coff_reloc16_relax_section() in reloc16.c during the
+   multi-pass relaxation loop.  The SHRINK parameter is the cumulative
+   shrinkage up to this relocation; we return the new cumulative value.  */
+
+/* Compute the cumulative number of bytes deleted before ADDR by
+   scanning the reloc vector for R_IMM32_SHORT entries (each saves
+   2 bytes vs R_IMM32).  */
+
+static unsigned
+z8k_shrinkage_before (bfd_vma addr, arelent **relocs, long reloc_count)
+{
+  unsigned shrink = 0;
+  long i;
+  for (i = 0; i < reloc_count && relocs[i]; i++)
+    {
+      if (relocs[i]->address >= addr)
+	break;
+      if (relocs[i]->howto->type == R_IMM32_SHORT)
+	{
+	  shrink += 2;
+	}
+    }
+  return shrink;
+}
+
+/* ELF-style relaxation for Z8K segmented short addresses.
+   Scans R_IMM32 relocs, converts those whose target offset fits in
+   8 bits to R_IMM32_SHORT (saving 2 bytes each).  Multi-pass until
+   convergence, then adjusts all symbol values and reloc addresses.  */
+
+static bool
+z8k_relax_section (bfd *abfd,
+		   asection *input_section,
+		   struct bfd_link_info *link_info,
+		   bool *again)
+{
+  long reloc_size, reloc_count;
+  arelent **reloc_vector;
+  bool changed;
+  unsigned total_shrink;
+
+  *again = false;
+
+  if (bfd_link_relocatable (link_info))
+    return true;
+
+  reloc_size = bfd_get_reloc_upper_bound (abfd, input_section);
+  if (reloc_size <= 0)
+    return reloc_size == 0;
+
+  reloc_vector = (arelent **) bfd_malloc (reloc_size);
+  if (reloc_vector == NULL)
+    return false;
+
+  reloc_count = bfd_canonicalize_reloc (abfd, input_section, reloc_vector,
+					_bfd_generic_link_get_symbols (abfd));
+  if (reloc_count < 0)
+    {
+      free (reloc_vector);
+      return false;
+    }
+
+  /* Multi-pass: keep relaxing until no more changes.  */
+  {
+  do
+    {
+      long i;
+      changed = false;
+
+      for (i = 0; i < reloc_count && reloc_vector[i]; i++)
+	{
+	  arelent *rel = reloc_vector[i];
+
+	  if (rel->howto->type != R_IMM32
+	      && rel->howto->type != R_IMM32_SHORT)
+	    continue;
+	  if (! (*rel->sym_ptr_ptr)->section->flags)
+	    continue;
+
+	  /* Compute the target's adjusted offset within the segment.
+	     The symbol value is still the ORIGINAL (unadjusted) value.
+	     Subtract shrinkage from relaxed relocs before the target.  */
+	  bfd_vma value = bfd_coff_reloc16_get_value (rel, link_info,
+						      input_section);
+	  bfd_vma offset = value & 0xffff;
+	  asymbol *sym = *rel->sym_ptr_ptr;
+	  if (sym->section == input_section)
+	    {
+	      unsigned s = z8k_shrinkage_before (sym->value, reloc_vector,
+						 reloc_count);
+	      if (offset >= s)
+		offset -= s;
+	    }
+
+	  if (offset <= 0xff && rel->howto->type == R_IMM32)
+	    {
+	      rel->howto = &r_imm32_short;
+	      changed = true;
+	    }
+	  else if (offset > 0xff && rel->howto->type == R_IMM32_SHORT)
+	    {
+	      rel->howto = &r_imm32;
+	      changed = true;
+	    }
+	}
+    }
+  while (changed);
+  }
+
+  /* Count total shrinkage and adjust symbol values.  */
+  total_shrink = z8k_shrinkage_before (input_section->size, reloc_vector,
+					reloc_count);
+
+  if (total_shrink > 0)
+    {
+      /* Adjust all symbol values in this section.  */
+      asymbol **syms = _bfd_generic_link_get_symbols (abfd);
+      if (syms != NULL)
+	{
+	  asymbol **sp;
+	  for (sp = syms; *sp; sp++)
+	    {
+	      asymbol *sym = *sp;
+	      if (sym->section != input_section)
+		continue;
+
+	      unsigned s = z8k_shrinkage_before (sym->value, reloc_vector,
+						 reloc_count);
+	      if (s > 0)
+		{
+		  sym->value -= s;
+		  if (sym->udata.p != NULL)
+		    {
+		      struct generic_link_hash_entry *h;
+		      h = (struct generic_link_hash_entry *) sym->udata.p;
+		      if (h->root.type == bfd_link_hash_defined
+			  || h->root.type == bfd_link_hash_defweak)
+			h->root.u.def.value = sym->value;
+		    }
+		}
+	    }
+	}
+
+      input_section->rawsize = input_section->size;
+      input_section->size -= total_shrink;
+    }
+
+  free (reloc_vector);
+  return true;
+}
+
 #define coff_reloc16_extra_cases    extra_case
 #define coff_bfd_reloc_type_lookup  coff_z8k_reloc_type_lookup
 #define coff_bfd_reloc_name_lookup coff_z8k_reloc_name_lookup
@@ -397,6 +576,6 @@ extra_case (bfd *in_abfd,
   bfd_coff_reloc16_get_relocated_section_contents
 
 #undef  coff_bfd_relax_section
-#define coff_bfd_relax_section bfd_coff_reloc16_relax_section
+#define coff_bfd_relax_section z8k_relax_section
 
 CREATE_BIG_COFF_TARGET_VEC (z8k_coff_vec, "coff-z8k", 0, 0, '_', NULL, COFF_SWAP_TABLE)

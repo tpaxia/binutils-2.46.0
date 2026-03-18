@@ -1052,11 +1052,29 @@ build_bytes (opcode_entry_type *this_try, struct z8k_op *operand ATTRIBUTE_UNUSE
 	  abort ();
 
 	case CLASS_ADDRESS:
-	  /* Direct address, we don't cope with the SS mode right now.  */
 	  if (segmented_mode)
 	    {
-	      /* da_operand->X_add_number |= 0x80000000;  --  Now set at relocation time.  */
-	      output_ptr = apply_fix (output_ptr, BFD_RELOC_32, da_operand, 8);
+	      /* Z8001 segmented address.  If the operand is resolved
+		 (no symbol) and the offset fits in 8 bits, use the
+		 short form.  The value may be in instruction encoding
+		 (bit 31 set: 1SSSSSSS_xxxxxxxx_OOOOOOOO_OOOOOOOO)
+		 or raw (bit 31 clear).  Either way, offset is in
+		 bits 15-0 and segment in bits 30-24.  */
+	      if (!da_operand->X_add_symbol
+		  && !da_operand->X_op_symbol
+		  && (da_operand->X_add_number & 0xffff) <= 0xff)
+		{
+		  unsigned long addr = da_operand->X_add_number;
+		  unsigned long seg = (addr >> 24) & 0x7f;
+		  unsigned long off = addr & 0xff;
+		  da_operand->X_add_number = (seg << 8) | off;
+		  output_ptr = apply_fix (output_ptr, BFD_RELOC_16, da_operand, 4);
+		}
+	      else
+		{
+		  /* Long form: set at relocation time by the linker.  */
+		  output_ptr = apply_fix (output_ptr, BFD_RELOC_32, da_operand, 8);
+		}
 	    }
 	  else
 	    {
@@ -1308,6 +1326,20 @@ md_atof (int type, char *litP, int *sizeP)
   return ieee_md_atof (type, litP, sizeP, true);
 }
 
+/* When linker relaxation is active, PC-relative fixups must not be
+   resolved at assembly time — they need to be emitted as relocations
+   so the linker can recompute them after shrinking instructions.  */
+
+int
+z8k_force_relocation (fixS *fix)
+{
+  if (linkrelax && fix->fx_addsy
+      && S_GET_SEGMENT (fix->fx_addsy) != absolute_section)
+    return 1;
+
+  return generic_force_reloc (fix);
+}
+
 const char md_shortopts[] = "z:";
 
 const struct option md_longopts[] =
