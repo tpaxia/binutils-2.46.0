@@ -52,6 +52,18 @@ s_segm (int segm)
     }
 }
 
+/* When non-zero, the next CLASS_ADDRESS fixup is emitted as
+   R_IMM32_NORELAX so the linker will not shorten it.  Cleared
+   after one use.  */
+static int force_long_addr;
+
+static void
+s_long_addr (int ignore ATTRIBUTE_UNUSED)
+{
+  force_long_addr = 1;
+  demand_empty_rest_of_line ();
+}
+
 static void
 even (int ignore ATTRIBUTE_UNUSED)
 {
@@ -126,6 +138,7 @@ const pseudo_typeS md_pseudo_table[] = {
   {"sect"   , obj_coff_section, 0},
   {"block"  , s_space         , 0},
   {"even"   , even            , 0},
+  {"long_addr", s_long_addr   , 0},
   {0        , 0               , 0}
 };
 
@@ -981,6 +994,7 @@ newfix (int ptr, bfd_reloc_code_real_type type, int size, expressionS *operand)
                           operand, is_pcrel, type);
       if (is_pcrel)
 	fixP->fx_no_overflow = 1;
+      fixP->tc_fix_data = force_long_addr;
     }
 }
 
@@ -1075,6 +1089,7 @@ build_bytes (opcode_entry_type *this_try, struct z8k_op *operand ATTRIBUTE_UNUSE
 		  /* Long form: set at relocation time by the linker.  */
 		  output_ptr = apply_fix (output_ptr, BFD_RELOC_32, da_operand, 8);
 		}
+	      force_long_addr = 0;
 	    }
 	  else
 	    {
@@ -1334,7 +1349,8 @@ int
 z8k_force_relocation (fixS *fix)
 {
   if (linkrelax && fix->fx_addsy
-      && S_GET_SEGMENT (fix->fx_addsy) != absolute_section)
+      && S_GET_SEGMENT (fix->fx_addsy) != absolute_section
+      && !fix->fx_pcrel)
     return 1;
 
   return generic_force_reloc (fix);
@@ -1420,6 +1436,12 @@ tc_gen_reloc (asection *section ATTRIBUTE_UNUSED,
                     bfd_get_reloc_code_name (fixp->fx_r_type));
       abort ();
     }
+
+  /* If .long_addr was active, switch R_IMM32 to R_IMM32_NORELAX so
+     the linker's relaxation pass will leave this reference alone.  */
+  if (fixp->tc_fix_data && reloc->howto->type == R_IMM32)
+    reloc->howto = bfd_reloc_name_lookup (stdoutput, "r_imm32_norelax");
+
   return reloc;
 }
 

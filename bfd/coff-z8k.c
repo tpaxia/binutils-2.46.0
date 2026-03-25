@@ -47,6 +47,14 @@ HOWTO (R_IMM32_SHORT, 0, 4, 32, false, 0,
        complain_overflow_bitfield, 0, "r_imm32_short", true, 0xffffffff,
        0xffffffff, false);
 
+/* Long-form segmented address that must not be relaxed to short form.
+   Emitted by the assembler when .long_addr is used.  Behaves identically
+   to R_IMM32 in the final link, but z8k_relax_section skips it.  */
+static reloc_howto_type r_imm32_norelax =
+HOWTO (R_IMM32_NORELAX, 0, 4, 32, false, 0,
+       complain_overflow_bitfield, 0, "r_imm32_norelax", true, 0xffffffff,
+       0xffffffff, false);
+
 static reloc_howto_type r_imm4l =
 HOWTO (R_IMM4L, 0, 1, 4, false, 0,
        complain_overflow_bitfield, 0, "r_imm4l", true, 0xf, 0xf, false);
@@ -123,6 +131,9 @@ rtype2howto (arelent *internal, struct internal_reloc *dst)
     case R_IMM4L:
       internal->howto = &r_imm4l;
       break;
+    case R_IMM32_NORELAX:
+      internal->howto = &r_imm32_norelax;
+      break;
     }
 }
 
@@ -167,6 +178,8 @@ coff_z8k_reloc_name_lookup (bfd *abfd ATTRIBUTE_UNUSED,
     return &r_callr;
   if (strcasecmp (r_imm4l.name, r_name) == 0)
     return &r_imm4l;
+  if (strcasecmp (r_imm32_norelax.name, r_name) == 0)
+    return &r_imm32_norelax;
 
   return NULL;
 }
@@ -240,6 +253,7 @@ extra_case (bfd *in_abfd,
       break;
 
     case R_IMM32:
+    case R_IMM32_NORELAX:
       /* If no flags are set, assume immediate value.  */
       if (! (*reloc->sym_ptr_ptr)->section->flags)
 	{
@@ -486,8 +500,22 @@ z8k_relax_section (bfd *abfd,
 	  if (rel->howto->type != R_IMM32
 	      && rel->howto->type != R_IMM32_SHORT)
 	    continue;
-	  if (! (*rel->sym_ptr_ptr)->section->flags)
-	    continue;
+	  /* Skip symbols we cannot resolve to a final address.  */
+	  {
+	    asymbol *s = *rel->sym_ptr_ptr;
+	    if (bfd_is_und_section (s->section)
+		|| bfd_is_com_section (s->section))
+	      {
+		struct bfd_link_hash_entry *h;
+		h = bfd_wrapped_link_hash_lookup (abfd, link_info,
+						  bfd_asymbol_name (s),
+						  false, false, true);
+		if (h == NULL
+		    || (h->type != bfd_link_hash_defined
+			&& h->type != bfd_link_hash_defweak))
+		  continue;
+	      }
+	  }
 
 	  /* Compute the target's adjusted offset within the segment.
 	     The symbol value is still the ORIGINAL (unadjusted) value.

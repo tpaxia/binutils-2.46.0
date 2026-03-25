@@ -38,6 +38,11 @@ struct internal_reloc;
 #define TC_FORCE_RELOCATION(FIX)	z8k_force_relocation (FIX)
 extern int z8k_force_relocation (struct fix *);
 
+/* Per-fixup flag: when set, the fixup emits R_IMM32_NORELAX instead
+   of R_IMM32, preventing the linker from relaxing it to short form.  */
+#define TC_FIX_TYPE		int
+#define TC_INIT_FIX_DATA(FIX)	((FIX)->tc_fix_data = 0)
+
 #define LISTING_HEADER "Zilog Z8000 GAS "
 #define RELOC_32 1234
 

@@ -58,3 +58,4 @@ struct external_reloc
 #define R_SEG     0x10		/* set if in segmented mode */
 #define R_IMM4H   0x24		/* high nibble */
 #define R_DISP7   0x25		/* djnz displacement */
+#define R_IMM32_NORELAX 0x31	/* 32 bit abs, exempt from relaxation */
