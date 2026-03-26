@@ -990,6 +990,15 @@ newfix (int ptr, bfd_reloc_code_real_type type, int size, expressionS *operand)
 	  is_pcrel = 0;
 	  break;
         }
+      /* Skip fixup for pure constants (no symbol, not PC-relative).
+	 The value is already written into the instruction by apply_fix.
+	 Under -linkrelax, such fixups would otherwise become spurious
+	 relocations against *ABS* because fixup_segment's linkrelax
+	 early-return path assigns abs_section_sym to all symbolless
+	 fixups without resolving them.  */
+      if (!operand->X_add_symbol && !operand->X_op_symbol && !is_pcrel)
+	return;
+
       fixP = fix_new_exp (frag_now, ptr, size / 2,
                           operand, is_pcrel, type);
       if (is_pcrel)
