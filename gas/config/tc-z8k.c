@@ -1003,7 +1003,11 @@ newfix (int ptr, bfd_reloc_code_real_type type, int size, expressionS *operand)
                           operand, is_pcrel, type);
       if (is_pcrel)
 	fixP->fx_no_overflow = 1;
-      fixP->tc_fix_data = force_long_addr;
+      /* Bit 0: force_long_addr (.long_addr directive active).
+	 Bit 1: this fixup is from an instruction (not a data directive).
+	 Data directive fixups (.long, .word) bypass newfix entirely, so
+	 their tc_fix_data remains 0 from TC_INIT_FIX_DATA.  */
+      fixP->tc_fix_data = (force_long_addr ? 1 : 0) | 2;
     }
 }
 
@@ -1446,9 +1450,12 @@ tc_gen_reloc (asection *section ATTRIBUTE_UNUSED,
       abort ();
     }
 
-  /* If .long_addr was active, switch R_IMM32 to R_IMM32_NORELAX so
-     the linker's relaxation pass will leave this reference alone.  */
-  if (fixp->tc_fix_data && reloc->howto->type == R_IMM32)
+  /* Switch R_IMM32 to R_IMM32_NORELAX for fixups that should not be
+     relaxed: .long_addr instructions (bit 0) and data directives like
+     .long/.word that didn't come from instruction encoding (bit 1
+     not set).  Data tables must keep their 4-byte layout.  */
+  if (reloc->howto->type == R_IMM32
+      && ((fixp->tc_fix_data & 1) || !(fixp->tc_fix_data & 2)))
     reloc->howto = bfd_reloc_name_lookup (stdoutput, "r_imm32_norelax");
 
   /* Under -linkrelax, use overflow-suppressed variants for PC-relative
