@@ -86,6 +86,24 @@ static reloc_howto_type r_callr =
 HOWTO (R_CALLR, 1, 2, 12, true, 0, complain_overflow_signed, 0,
        "r_callr", true, 0xfff, 0xfff, true);
 
+/* Linkrelax variants of PC-relative howtos: suppress overflow checking
+   at assembly time.  The pre-relaxation displacement may exceed the
+   instruction's range, but after the linker shrinks intervening
+   instructions, the displacement will fit.  The linker's extra_case
+   handler recomputes the displacement from final addresses.  */
+
+static reloc_howto_type r_jr_relax =
+HOWTO (R_JR, 1, 1, 8, true, 0, complain_overflow_dont, 0,
+       "r_jr_relax", true, 0xff, 0xff, true);
+
+static reloc_howto_type r_disp7_relax =
+HOWTO (R_DISP7, 0, 1, 7, true, 0, complain_overflow_dont, 0,
+       "r_disp7_relax", true, 0x7f, 0x7f, true);
+
+static reloc_howto_type r_callr_relax =
+HOWTO (R_CALLR, 1, 2, 12, true, 0, complain_overflow_dont, 0,
+       "r_callr_relax", true, 0xfff, 0xfff, true);
+
 #define BADMAG(x) Z8KBADMAG(x)
 #define Z8K 1			/* Customize coffcode.h.  */
 #define __A_MAGIC_SET__
@@ -180,6 +198,12 @@ coff_z8k_reloc_name_lookup (bfd *abfd ATTRIBUTE_UNUSED,
     return &r_imm4l;
   if (strcasecmp (r_imm32_norelax.name, r_name) == 0)
     return &r_imm32_norelax;
+  if (strcasecmp (r_jr_relax.name, r_name) == 0)
+    return &r_jr_relax;
+  if (strcasecmp (r_disp7_relax.name, r_name) == 0)
+    return &r_disp7_relax;
+  if (strcasecmp (r_callr_relax.name, r_name) == 0)
+    return &r_callr_relax;
 
   return NULL;
 }

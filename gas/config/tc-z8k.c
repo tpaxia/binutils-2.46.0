@@ -1451,6 +1451,30 @@ tc_gen_reloc (asection *section ATTRIBUTE_UNUSED,
   if (fixp->tc_fix_data && reloc->howto->type == R_IMM32)
     reloc->howto = bfd_reloc_name_lookup (stdoutput, "r_imm32_norelax");
 
+  /* Under -linkrelax, use overflow-suppressed variants for PC-relative
+     relocations.  The pre-relaxation displacement may exceed the
+     instruction's range, but the linker will recompute it after
+     shrinking intervening instructions.  */
+  if (linkrelax && fixp->fx_pcrel)
+    {
+      reloc_howto_type *relaxed = NULL;
+
+      switch (reloc->howto->type)
+	{
+	case R_JR:
+	  relaxed = bfd_reloc_name_lookup (stdoutput, "r_jr_relax");
+	  break;
+	case R_DISP7:
+	  relaxed = bfd_reloc_name_lookup (stdoutput, "r_disp7_relax");
+	  break;
+	case R_CALLR:
+	  relaxed = bfd_reloc_name_lookup (stdoutput, "r_callr_relax");
+	  break;
+	}
+      if (relaxed)
+	reloc->howto = relaxed;
+    }
+
   return reloc;
 }
 
