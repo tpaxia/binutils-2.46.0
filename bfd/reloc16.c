@@ -305,16 +305,23 @@ bfd_coff_reloc16_get_relocated_section_contents
 	    {
 	      /* Note that the relaxing didn't tie up the addresses in the
 		 relocation, so we use the original address to work out the
-		 run of non-relocated data.  */
-	      if (reloc->address > link_order->size
-		  || reloc->address < src_address)
-		{
-		  link_info->callbacks->einfo
-		    /* xgettext:c-format */
-		    (_("%X%P: %pB(%pA): relocation \"%pR\" goes out of range\n"),
-		     input_bfd, input_section, reloc);
-		  goto error_return;
-		}
+		 run of non-relocated data.  Use rawsize (the pre-relaxation
+		 input size) for the bounds check, since reloc addresses are
+		 in input coordinates while link_order->size is the output
+		 (post-relaxation) size.  */
+	      {
+		bfd_size_type input_size = input_section->rawsize
+		  ? input_section->rawsize : link_order->size;
+		if (reloc->address > input_size
+		    || reloc->address < src_address)
+		  {
+		    link_info->callbacks->einfo
+		      /* xgettext:c-format */
+		      (_("%X%P: %pB(%pA): relocation \"%pR\" goes out of range\n"),
+		       input_bfd, input_section, reloc);
+		    goto error_return;
+		  }
+	      }
 	      run = reloc->address - src_address;
 	      parent++;
 	    }
