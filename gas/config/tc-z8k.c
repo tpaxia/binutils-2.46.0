@@ -1087,7 +1087,8 @@ build_bytes (opcode_entry_type *this_try, struct z8k_op *operand ATTRIBUTE_UNUSE
 		 (bit 31 set: 1SSSSSSS_xxxxxxxx_OOOOOOOO_OOOOOOOO)
 		 or raw (bit 31 clear).  Either way, offset is in
 		 bits 15-0 and segment in bits 30-24.  */
-	      if (!da_operand->X_add_symbol
+	      if (!force_long_addr
+		  && !da_operand->X_add_symbol
 		  && !da_operand->X_op_symbol
 		  && (da_operand->X_add_number & 0xffff) <= 0xff)
 		{
