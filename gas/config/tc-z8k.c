@@ -1107,7 +1107,6 @@ build_bytes (opcode_entry_type *this_try, struct z8k_op *operand ATTRIBUTE_UNUSE
 		    da_operand->X_add_number |= 0x80000000;
 		  output_ptr = apply_fix (output_ptr, BFD_RELOC_32, da_operand, 8);
 		}
-	      force_long_addr = 0;
 	    }
 	  else
 	    {
@@ -1239,6 +1238,10 @@ build_bytes (opcode_entry_type *this_try, struct z8k_op *operand ATTRIBUTE_UNUSE
 	  }
 	}
     }
+
+  /* .long_addr applies to exactly one instruction.  Clear it after the
+     instruction is fully encoded, so it doesn't leak to later ones.  */
+  force_long_addr = 0;
 
   /* Copy from the nibble buffer into the frag.  */
   {
