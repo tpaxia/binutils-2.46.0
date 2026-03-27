@@ -1100,7 +1100,11 @@ build_bytes (opcode_entry_type *this_try, struct z8k_op *operand ATTRIBUTE_UNUSE
 		}
 	      else
 		{
-		  /* Long form: set at relocation time by the linker.  */
+		  /* Long form.  For resolved absolute values, set bit 31
+		     (the long-form indicator: first word bit 15 = 1).
+		     For symbol references the linker sets this bit.  */
+		  if (!da_operand->X_add_symbol && !da_operand->X_op_symbol)
+		    da_operand->X_add_number |= 0x80000000;
 		  output_ptr = apply_fix (output_ptr, BFD_RELOC_32, da_operand, 8);
 		}
 	      force_long_addr = 0;
