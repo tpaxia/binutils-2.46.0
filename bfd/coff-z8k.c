@@ -31,9 +31,32 @@
 
 #define COFF_DEFAULT_SECTION_ALIGNMENT_POWER (1)
 
+/* When producing relocatable output, bfd_perform_relocation's COFF
+   partial_inplace handling zeroes reloc_entry->addend (reloc.c ~line 881).
+   Z8K stores the addend in r_offset and extra_case reads it back via
+   bfd_coff_reloc16_get_value, so zeroing it loses the addend after ld -r.
+   Short-circuit bfd_perform_relocation for relocatable output: just adjust
+   the address and preserve the addend.  Same pattern as coff_i386_reloc.  */
+
+static bfd_reloc_status_type
+z8k_reloc (bfd *abfd ATTRIBUTE_UNUSED,
+	   arelent *reloc_entry,
+	   asymbol *symbol ATTRIBUTE_UNUSED,
+	   void *data ATTRIBUTE_UNUSED,
+	   asection *input_section,
+	   bfd *output_bfd,
+	   char **error_message ATTRIBUTE_UNUSED)
+{
+  if (output_bfd == NULL)
+    return bfd_reloc_continue;
+
+  reloc_entry->address += input_section->output_offset;
+  return bfd_reloc_ok;
+}
+
 static reloc_howto_type r_imm32 =
 HOWTO (R_IMM32, 0, 4, 32, false, 0,
-       complain_overflow_bitfield, 0, "r_imm32", true, 0xffffffff,
+       complain_overflow_bitfield, z8k_reloc, "r_imm32", true, 0xffffffff,
        0xffffffff, false);
 
 /* Internal relocation type used during linker relaxation.  When a segmented
@@ -44,7 +67,7 @@ HOWTO (R_IMM32, 0, 4, 32, false, 0,
 #define R_IMM32_SHORT 0x30
 static reloc_howto_type r_imm32_short =
 HOWTO (R_IMM32_SHORT, 0, 4, 32, false, 0,
-       complain_overflow_bitfield, 0, "r_imm32_short", true, 0xffffffff,
+       complain_overflow_bitfield, z8k_reloc, "r_imm32_short", true, 0xffffffff,
        0xffffffff, false);
 
 /* Long-form segmented address that must not be relaxed to short form.
@@ -52,38 +75,38 @@ HOWTO (R_IMM32_SHORT, 0, 4, 32, false, 0,
    to R_IMM32 in the final link, but z8k_relax_section skips it.  */
 static reloc_howto_type r_imm32_norelax =
 HOWTO (R_IMM32_NORELAX, 0, 4, 32, false, 0,
-       complain_overflow_bitfield, 0, "r_imm32_norelax", true, 0xffffffff,
+       complain_overflow_bitfield, z8k_reloc, "r_imm32_norelax", true, 0xffffffff,
        0xffffffff, false);
 
 static reloc_howto_type r_imm4l =
 HOWTO (R_IMM4L, 0, 1, 4, false, 0,
-       complain_overflow_bitfield, 0, "r_imm4l", true, 0xf, 0xf, false);
+       complain_overflow_bitfield, z8k_reloc, "r_imm4l", true, 0xf, 0xf, false);
 
 static reloc_howto_type r_da =
 HOWTO (R_IMM16, 0, 2, 16, false, 0,
-       complain_overflow_bitfield, 0, "r_da", true, 0x0000ffff, 0x0000ffff,
+       complain_overflow_bitfield, z8k_reloc, "r_da", true, 0x0000ffff, 0x0000ffff,
        false);
 
 static reloc_howto_type r_imm8 =
 HOWTO (R_IMM8, 0, 1, 8, false, 0,
-       complain_overflow_bitfield, 0, "r_imm8", true, 0x000000ff, 0x000000ff,
+       complain_overflow_bitfield, z8k_reloc, "r_imm8", true, 0x000000ff, 0x000000ff,
        false);
 
 static reloc_howto_type r_rel16 =
 HOWTO (R_REL16, 0, 2, 16, false, 0,
-       complain_overflow_bitfield, 0, "r_rel16", true, 0x0000ffff, 0x0000ffff,
+       complain_overflow_bitfield, z8k_reloc, "r_rel16", true, 0x0000ffff, 0x0000ffff,
        true);
 
 static reloc_howto_type r_jr =
-HOWTO (R_JR, 1, 1, 8, true, 0, complain_overflow_signed, 0,
+HOWTO (R_JR, 1, 1, 8, true, 0, complain_overflow_signed, z8k_reloc,
        "r_jr", true, 0xff, 0xff, true);
 
 static reloc_howto_type r_disp7 =
-HOWTO (R_DISP7, 0, 1, 7, true, 0, complain_overflow_bitfield, 0,
+HOWTO (R_DISP7, 0, 1, 7, true, 0, complain_overflow_bitfield, z8k_reloc,
        "r_disp7", true, 0x7f, 0x7f, true);
 
 static reloc_howto_type r_callr =
-HOWTO (R_CALLR, 1, 2, 12, true, 0, complain_overflow_signed, 0,
+HOWTO (R_CALLR, 1, 2, 12, true, 0, complain_overflow_signed, z8k_reloc,
        "r_callr", true, 0xfff, 0xfff, true);
 
 /* Linkrelax variants of PC-relative howtos: suppress overflow checking
@@ -93,15 +116,15 @@ HOWTO (R_CALLR, 1, 2, 12, true, 0, complain_overflow_signed, 0,
    handler recomputes the displacement from final addresses.  */
 
 static reloc_howto_type r_jr_relax =
-HOWTO (R_JR, 1, 1, 8, true, 0, complain_overflow_dont, 0,
+HOWTO (R_JR, 1, 1, 8, true, 0, complain_overflow_dont, z8k_reloc,
        "r_jr_relax", true, 0xff, 0xff, true);
 
 static reloc_howto_type r_disp7_relax =
-HOWTO (R_DISP7, 0, 1, 7, true, 0, complain_overflow_dont, 0,
+HOWTO (R_DISP7, 0, 1, 7, true, 0, complain_overflow_dont, z8k_reloc,
        "r_disp7_relax", true, 0x7f, 0x7f, true);
 
 static reloc_howto_type r_callr_relax =
-HOWTO (R_CALLR, 1, 2, 12, true, 0, complain_overflow_dont, 0,
+HOWTO (R_CALLR, 1, 2, 12, true, 0, complain_overflow_dont, z8k_reloc,
        "r_callr_relax", true, 0xfff, 0xfff, true);
 
 #define BADMAG(x) Z8KBADMAG(x)
