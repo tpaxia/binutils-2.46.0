@@ -636,6 +636,189 @@ z8k_relax_section (bfd *abfd,
   return true;
 }
 
+/* Z8K gc-sections implementation.
+   The standard _bfd_coff_gc_sections crashes because Z8K uses the generic
+   linker (not _bfd_coff_final_link), so obj_coff_sym_hashes is never
+   populated.  This implementation uses the raw COFF symbol table instead.  */
+
+/* Mark sections reachable from SEC by following relocations.  */
+
+/* Resolve a relocation's target section: use the raw COFF symbol table for
+   local symbols, and the link hash table for external/undefined symbols.  */
+
+static asection *
+z8k_gc_resolve_reloc_section (bfd *abfd, struct internal_reloc *rel,
+			      struct bfd_link_info *info)
+{
+  combined_entry_type *csym;
+  int scnum;
+
+  if ((unsigned long) rel->r_symndx >= obj_raw_syment_count (abfd))
+    return NULL;
+
+  csym = obj_raw_syments (abfd) + rel->r_symndx;
+  scnum = csym->u.syment.n_scnum;
+
+  if (scnum > 0)
+    return coff_section_from_bfd_index (abfd, scnum);
+
+  /* External/undefined symbol — look up via the BFD canonical symbol table
+     (populated by bfd_coff_slurp_symbol_table) and the link hash table.  */
+  {
+    unsigned int *conv = obj_convert (abfd);
+    coff_symbol_type *syms = obj_symbols (abfd);
+    const char *name;
+    struct bfd_link_hash_entry *h;
+
+    if (!conv || !syms)
+      return NULL;
+
+    name = (syms + conv[rel->r_symndx])->symbol.name;
+    if (!name || !*name)
+      return NULL;
+
+    h = bfd_link_hash_lookup (info->hash, name, false, false, true);
+    if (h && (h->type == bfd_link_hash_defined
+	      || h->type == bfd_link_hash_defweak))
+      return h->u.def.section;
+  }
+
+  return NULL;
+}
+
+static bool
+z8k_gc_mark (bfd *abfd, struct bfd_link_info *info, asection *sec)
+{
+  struct internal_reloc *relocs, *rel, *relend;
+
+  sec->gc_mark = 1;
+
+  if (!(sec->flags & SEC_RELOC) || sec->reloc_count == 0)
+    return true;
+
+  relocs = bfd_coff_read_internal_relocs (abfd, sec, false, NULL, false, NULL);
+  if (!relocs)
+    return true;
+
+  relend = relocs + sec->reloc_count;
+  for (rel = relocs; rel < relend; rel++)
+    {
+      asection *rsec = z8k_gc_resolve_reloc_section (abfd, rel, info);
+      if (rsec && !rsec->gc_mark)
+	{
+	  if (!z8k_gc_mark (rsec->owner, info, rsec))
+	    return false;
+	}
+    }
+
+  if (coff_section_data (abfd, sec) == NULL
+      || coff_section_data (abfd, sec)->relocs != relocs)
+    free (relocs);
+
+  return true;
+}
+
+static bool
+z8k_gc_sections (bfd *abfd ATTRIBUTE_UNUSED, struct bfd_link_info *info)
+{
+  bfd *sub;
+
+  /* Mark sections containing entry point and -u symbols.  */
+  {
+    struct bfd_sym_chain *sym;
+    for (sym = info->gc_sym_list; sym; sym = sym->next)
+      {
+	struct bfd_link_hash_entry *h;
+	h = bfd_link_hash_lookup (info->hash, sym->name, false, false, false);
+	if (h && (h->type == bfd_link_hash_defined
+		  || h->type == bfd_link_hash_defweak)
+	    && !bfd_is_abs_section (h->u.def.section))
+	  h->u.def.section->flags |= SEC_KEEP;
+      }
+  }
+
+  /* Mark phase: walk relocations from kept/entry sections.  */
+  for (sub = info->input_bfds; sub; sub = sub->link.next)
+    {
+      asection *sec;
+
+      if (bfd_get_flavour (sub) != bfd_target_coff_flavour)
+	continue;
+
+      /* Ensure raw symbol table is loaded.  */
+      if (!_bfd_coff_get_external_symbols (sub))
+	continue;
+      if (!obj_raw_syments (sub))
+	bfd_coff_slurp_symbol_table (sub);
+
+      for (sec = sub->sections; sec; sec = sec->next)
+	{
+	  if (((sec->flags & (SEC_EXCLUDE | SEC_KEEP)) == SEC_KEEP
+	       || startswith (sec->name, ".vectors")
+	       || startswith (sec->name, ".ctors")
+	       || startswith (sec->name, ".dtors"))
+	      && !sec->gc_mark)
+	    {
+	      if (!z8k_gc_mark (sub, info, sec))
+		return false;
+	    }
+	}
+    }
+
+  /* Mark extra: keep debug, linker-created, and non-alloc sections.  */
+  for (sub = info->input_bfds; sub; sub = sub->link.next)
+    {
+      asection *sec;
+      bool some_kept = false;
+
+      if (bfd_get_flavour (sub) != bfd_target_coff_flavour)
+	continue;
+
+      for (sec = sub->sections; sec; sec = sec->next)
+	{
+	  if (sec->flags & SEC_LINKER_CREATED)
+	    sec->gc_mark = 1;
+	  else if (sec->gc_mark)
+	    some_kept = true;
+	}
+
+      if (!some_kept)
+	continue;
+
+      for (sec = sub->sections; sec; sec = sec->next)
+	if ((sec->flags & SEC_DEBUGGING) != 0
+	    || (sec->flags & (SEC_ALLOC | SEC_LOAD | SEC_RELOC)) == 0)
+	  sec->gc_mark = 1;
+    }
+
+  /* Sweep: exclude unmarked sections.  */
+  for (sub = info->input_bfds; sub; sub = sub->link.next)
+    {
+      asection *sec;
+
+      if (bfd_get_flavour (sub) != bfd_target_coff_flavour)
+	continue;
+
+      for (sec = sub->sections; sec; sec = sec->next)
+	{
+	  if (sec->gc_mark || (sec->flags & SEC_EXCLUDE))
+	    continue;
+	  if ((sec->flags & (SEC_DEBUGGING | SEC_LINKER_CREATED)) != 0)
+	    continue;
+
+	  sec->flags |= SEC_EXCLUDE;
+
+	  if (info->print_gc_sections && sec->size != 0)
+	    _bfd_error_handler
+	      (_("removing unused section '%pA' in file '%pB'"), sec, sub);
+	}
+    }
+
+  return true;
+}
+
+#define coff_bfd_gc_sections z8k_gc_sections
+
 #define coff_reloc16_extra_cases    extra_case
 #define coff_bfd_reloc_type_lookup  coff_z8k_reloc_type_lookup
 #define coff_bfd_reloc_name_lookup coff_z8k_reloc_name_lookup

@@ -2981,9 +2981,10 @@ _bfd_coff_gc_mark_rsec (struct bfd_link_info *info, asection *sec,
 			coff_gc_mark_hook_fn gc_mark_hook,
 			struct coff_reloc_cookie *cookie)
 {
-  struct coff_link_hash_entry *h;
+  struct coff_link_hash_entry *h = NULL;
 
-  h = cookie->sym_hashes[cookie->rel->r_symndx];
+  if (cookie->sym_hashes)
+    h = cookie->sym_hashes[cookie->rel->r_symndx];
   if (h != NULL)
     {
       while (h->root.type == bfd_link_hash_indirect
